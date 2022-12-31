@@ -1,0 +1,11 @@
+LICENSE.txt
+MANIFEST.in
+PDForensic.py
+README.md
+examples.py
+setup.py
+PDForensic.egg-info/PKG-INFO
+PDForensic.egg-info/SOURCES.txt
+PDForensic.egg-info/dependency_links.txt
+PDForensic.egg-info/entry_points.txt
+PDForensic.egg-info/top_level.txt

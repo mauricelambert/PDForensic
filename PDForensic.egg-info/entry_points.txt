@@ -1,0 +1,3 @@
+[console_scripts]
+PDForensic = PDForensic:main
+
