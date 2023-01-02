@@ -3,7 +3,7 @@
 
 ###################
 #    This tool analyses PDF files for Forensic Investigations
-#    Copyright (C) 2022  Maurice Lambert
+#    Copyright (C) 2022, 2023  Maurice Lambert
 
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -425,7 +425,7 @@ eof_tag b'%%EOF\n'
 >>> 
 """
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 __author__ = "Maurice Lambert"
 __author_email__ = "mauricelambert434@gmail.com"
 __maintainer__ = "Maurice Lambert"
@@ -435,7 +435,7 @@ license = "GPL-3.0 License"
 __url__ = "https://github.com/mauricelambert/PDForensic"
 
 copyright = """
-PDForensic  Copyright (C) 2022  Maurice Lambert
+PDForensic  Copyright (C) 2022, 2023  Maurice Lambert
 This program comes with ABSOLUTELY NO WARRANTY.
 This is free software, and you are welcome to redistribute it
 under certain conditions.
@@ -450,11 +450,11 @@ print(copyright)
 from logging import StreamHandler, Formatter, Logger, getLogger
 from sys import stdout, stderr, stdin, _getframe
 from re import compile as regex, Pattern, Match
-from collections.abc import Callable, Iterable
+from typing import Dict, Union, Tuple, Iterable
 from argparse import ArgumentParser, Namespace
 from base64 import b16decode, b16encode
 from os.path import basename, splitext
-from typing import Dict, Union, Tuple
+from collections.abc import Callable
 from abc import ABC, abstractmethod
 from urllib.request import urlopen
 from collections import Counter
@@ -466,9 +466,9 @@ from json import dump
 from math import ceil
 
 pdf_parser: Pattern = regex(
-    r"""(?mx)
+    r"""(?x)
 (?P<object>
-    \d+\s+\d+\s+obj(\r|\n)?<+[^\n\r]+>+((\r|\n)?stream)?[\x00-\xff]*?((\r|\n)endstream)?(\r|\n)endobj
+    (\d+\s+\d+\s+obj(\r|\n)?(<+[\x00-\xff]+?>+))((\r|\n)?stream(\r|\n)([\x00-\xff]*?)((\r|\n)endstream)(\r|\n)endobj(\r|\n)|(\r|\n)endobj(\r|\n))
 ) |
 (?P<pdf_tag>
     %PDF(-\d+\.\d+)?(\r|\n)
@@ -488,43 +488,43 @@ pdf_parser: Pattern = regex(
 tags_parser: Pattern = regex(
     r"""(?x)
 (?P<command>
-    [^\n\r]+/Launch[^\n\r]+                                # Launch can launch a command
+    (\r|\n)<+[\x00-\xff]+/Launch[\x00-\xff]+$                                             # Launch can launch a command
 ) |
 (?P<AA_script_starter>
-    [^\n\r]+/AA\s*<+[^\n\r]+                               # Start run automatically scripts
-) |
+    (\r|\n)<+[\x00-\xff]+/AA\s*<+[\x00-\xff]+$                                            # Start run automatically scripts
+) |endstream\rendobj
 (?P<OpenAction_script_starter>
-    [^\n\r]+/OpenAction[^\n\r]+                            # Start run automatically scripts
+    (\r|\n)<+[\x00-\xff]+/OpenAction[\x00-\xff]+$                                         # Start run automatically scripts
 ) |
 (?P<scripts>
-    [^\n\r]+/JavaScript(\s*/JS(\([^\n\r]+\)>+)?)?          # Javascript code
+    (\r|\n)<+[\x00-\xff]+/JavaScript(\s*/JS(\([\x00-\xff]+\)[\x00-\xff]+)?)?[\x00-\xff]+$ # Javascript code
 ) |
 (?P<stream_object>
-    [^\n\r]+/ObjStm\s*/                                    # Hide object in stream
+    (\r|\n)<+[\x00-\xff]+/ObjStm\s*(/|>)                                                  # Hide object in stream
 ) |
 (?P<URI>
-    [^\n\r]+/URI[^\n\r]+                                   # Access resource by its URL
+    (\r|\n)<+[\x00-\xff]+/URI[\x00-\xff]+$                                                # Access resource by its URL
 ) |
 (?P<form>
-    [^\n\r]+/SubmitForm[^\n\r]+                            # Send data to server
+    (\r|\n)<+[\x00-\xff]+/SubmitForm[\x00-\xff]+$                                         # Send data to server
 ) |
 (?P<send>
-    [^\n\r]+/GoTo(R|E)[^\n\r]+                             # Send data to server
+    (\r|\n)<+[\x00-\xff]+/GoTo(R|E)[\x00-\xff]+$                                          # Send data to server
 ) |
 (?P<embedded>
-    [^\n\r]+/EmbeddedFile[^\n\r]+                          # Access resource by its URL
+    (\r|\n)<+[\x00-\xff]+/EmbeddedFile[\x00-\xff]+$                                       # Access resource by its URL
 ) |
 (?P<GoTo>
-    [^\n\r]+/GoTo\s*/[^\n\r]+                              # Change the view to a specified destination
+    (\r|\n)<+[\x00-\xff]+/GoTo\s*/[\x00-\xff]+$                                           # Change the view to a specified destination
 ) |
 (?P<acroform>
-    [^\n\r]+/AcroForm[\w\s]*/
+    (\r|\n)<+[\x00-\xff]+/AcroForm[\w\s]*(/|>)
 ) |
 (?P<malicious_image>
-    [^\n\r]+/JBIG2Decode\s*/
+    (\r|\n)<+[\x00-\xff]+/JBIG2Decode\s*(/|>)
 ) |
 (?P<media>
-    [^\n\r]+/RichMedia[^\n\r]+                             # RichMedia can be used to embed Flash in a PDF
+    (\r|\n)<+[\x00-\xff]+/RichMedia[\x00-\xff]+$                                          # RichMedia can be used to embed Flash in a PDF
 ) |
 (?P<date>
     D:(\d{14})[-+Z]?(\d{2}'\d{2}')?
@@ -696,9 +696,8 @@ class PDForensic(ABC):
 
         full_data = match.group()
         logger_debug("Getting tags for object " + str(self.current_id))
-        tags = (
-            full_data.split(b"<", 1)[1].split(b"\n", 1)[0].split(b"\r", 1)[0]
-        )
+        tags = match.group(2)
+        tags = tags if tags.strip() else match.group(1)
 
         if self.process_data:
             processed = self.filter(full_data)
@@ -712,11 +711,11 @@ class PDForensic(ABC):
             type_ = ""
 
             if group == "type":
-                type_ = data.split(b"/")[2].decode()
+                type_ = data.split(b"/")[2].strip().decode()
                 processed = self.type_filter(type_, full_data, processed)
                 self.type_counter["type - " + type_] += 1
             elif group == "subtype":
-                type_ = data.split(b"/")[2].decode()
+                type_ = data.split(b"/")[2].strip().decode()
                 processed = self.type_filter(type_, full_data, processed)
                 self.type_counter["subtype - " + type_] += 1
             elif group != "date":
