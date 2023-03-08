@@ -3,6 +3,7 @@ MANIFEST.in
 PDForensic.py
 README.md
 examples.py
+setup.cfg
 setup.py
 PDForensic.egg-info/PKG-INFO
 PDForensic.egg-info/SOURCES.txt

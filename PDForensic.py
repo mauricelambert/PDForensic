@@ -359,7 +359,7 @@ This tool analyses PDF files for Forensic Investigations
         "raw data - hexadecimal": []
     }
 }
-python3.11 PDForensic.py objstm.pdf --data --hexa 000102
+~# python3.11 PDForensic.py objstm.pdf --data --hexa 000102
 0         pdf_tag                   b'%PDF-1.5\n'
 3         object                    b'7 0 obj\n<< /Type /XRef /Length 32 /W [ 1 2 1 ] /Root 2 0 R /Size 8 /ID [<98e68406a8333cc2a3429ac0e8aa1fed><05fa7af561f775eeb73f00cd09fe19e7>] >>\nstream\n\x00\x00\x00\x00\x01\x00\x0f\x00\x02\x00\x01\x00\x02\x00\x01\x01\x02\x00\x01\x02\x02\x00\x01\x03\x01\x01J\x00\x01\x01\xb4\x00\nendstream\nendobj'
 4         startxref                 
@@ -391,6 +391,7 @@ python3.11 PDForensic.py objstm.pdf --data --hexa 000102
         ]
     }
 }
+~# 
 
 >>> from PDForensic import PDForensic
 >>> class MyPDFparser(PDForensic):
@@ -425,7 +426,7 @@ eof_tag b'%%EOF\n'
 >>> 
 """
 
-__version__ = "0.0.2"
+__version__ = "0.1.0"
 __author__ = "Maurice Lambert"
 __author_email__ = "mauricelambert434@gmail.com"
 __maintainer__ = "Maurice Lambert"
@@ -447,6 +448,11 @@ __all__ = ["PDForensic"]
 
 print(copyright)
 
+from zlib import (
+    decompress as zlib,
+    decompressobj as zlib_object,
+    error as zliberror,
+)
 from logging import StreamHandler, Formatter, Logger, getLogger
 from sys import stdout, stderr, stdin, _getframe
 from re import compile as regex, Pattern, Match
@@ -457,9 +463,12 @@ from os.path import basename, splitext
 from collections.abc import Callable
 from abc import ABC, abstractmethod
 from urllib.request import urlopen
+from contextlib import suppress
 from collections import Counter
+from binascii import unhexlify
 from datetime import datetime
 from _io import TextIOWrapper
+from io import BytesIO
 from glob import iglob
 from csv import writer
 from json import dump
@@ -467,64 +476,97 @@ from math import ceil
 
 pdf_parser: Pattern = regex(
     r"""(?x)
+(?P<null>
+    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+null[\x00\t\x0c\x20\r\n]+endobj
+) |
+(?P<boolean>
+    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+(true|false)[\x00\t\x0c\x20\r\n]+endobj
+) |
+(?P<integer>
+    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+-?\d+[\x00\t\x0c\x20\r\n]+endobj
+) |
+(?P<number>
+    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+-?\d+\.\d+[\x00\t\x0c\x20\r\n]+endobj
+) |
+(?P<ref>
+    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]\d+[\x00\t\x0c\x20\r\n]R[\x00\t\x0c\x20\r\n]+endobj
+) |
+(?P<string>
+    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+\([\x00-\xff]+\)[\x00\t\x0c\x20\r\n]+endobj
+) |
+(?P<array>
+    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+\[[\x00\t\x0c\x20\r\n]*((-?\d+(\.\d+)?|R|\([\x00-\xff]+?\)|<+[\x00-\xff]+?>+|\[[\x00-\xff]*?\]|true|false|null|/\w+)[\x00\t\x0c\x20\r\n]+)*(-?\d+(\.\d+)?|R|\([\x00-\xff]+\)|<+[\x00-\xff]+?>+|\[[\x00-\xff]*?\]|true|false|null|/\w+)[\x00\t\x0c\x20\r\n]*\][\x00\t\x0c\x20\r\n]+endobj
+) |
 (?P<object>
-    (\d+\s+\d+\s+obj(\r|\n)?(<+[\x00-\xff]+?>+))((\r|\n)?stream(\r|\n)([\x00-\xff]*?)((\r|\n)endstream)(\r|\n)endobj(\r|\n)|(\r|\n)endobj(\r|\n))
+    (\d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj([\x00\t\x0c\x20\r\n]+<+[\x00-\xff]+?>+))([\x00\t\x0c\x20\r\n]*stream[\x00\t\x0c\x20\r\n]([\x00-\xff]*?)([\x00\t\x0c\x20\r\n]endstream)[\x00\t\x0c\x20\r\n]+endobj[\x00\t\x0c\x20\r\n]|[\x00\t\x0c\x20\r\n]+endobj[\x00\t\x0c\x20\r\n])
+) |
+(?P<root>
+    <+((/ID[\x00\t\x0c\x20\r\n]*\[[\x00\t\x0c\x20\r\n]*(<[\da-fA-F]+>){1,2}\])|[^>]*?)*/Root((/ID[\x00\t\x0c\x20\r\n]*\[[\x00\t\x0c\x20\r\n]*(<[\da-fA-F]+>){1,2}\])|[^>]*?)*>+
 ) |
 (?P<pdf_tag>
-    %PDF(-\d+\.\d+)?(\r|\n)
+    %PDF(-\d+\.\d+)?[\x00\t\x0c\x20\r\n]
 ) |
 (?P<eof_tag>
-    %%EOF(\r|\n)
+    %%EOF[\x00\t\x0c\x20\r\n]?
+) |
+(?P<binary_tag>
+    %[\x00-\xff]{4}[\x00\t\x0c\x20\r\n]
 ) |
 (?P<startxref>
-    startxref[\n\r]+\d+[\n\r]+
+    startxref[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+
 ) |
 (?P<xref>
-    xref[\n\r\w ]+?trailer[\n\r]+
+    xref[\n\r\w ]+?trailer[\x00\t\x0c\x20\r\n]+
+) |
+(?P<unknow_object>
+    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00-\xff]+?endobj
+) |
+(?P<unknow_token>
+    [^\x00\t\x0c\x20\r\n]+
 )
 """.encode()
 )
 
 tags_parser: Pattern = regex(
-    r"""(?x)
+    r"""(?xi)
 (?P<command>
-    (\r|\n)<+[\x00-\xff]+/Launch[\x00-\xff]+$                                             # Launch can launch a command
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/Launch[\x00-\xff]+$                                             # Launch can launch a command
 ) |
 (?P<AA_script_starter>
-    (\r|\n)<+[\x00-\xff]+/AA\s*<+[\x00-\xff]+$                                            # Start run automatically scripts
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/AA\s*<+[\x00-\xff]+$                                            # Start run automatically scripts
 ) |endstream\rendobj
 (?P<OpenAction_script_starter>
-    (\r|\n)<+[\x00-\xff]+/OpenAction[\x00-\xff]+$                                         # Start run automatically scripts
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/OpenAction[\x00-\xff]+$                                         # Start run automatically scripts
 ) |
 (?P<scripts>
-    (\r|\n)<+[\x00-\xff]+/JavaScript(\s*/JS(\([\x00-\xff]+\)[\x00-\xff]+)?)?[\x00-\xff]+$ # Javascript code
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/JavaScript(\s*/JS(\([\x00-\xff]+\)[\x00-\xff]+)?)?[\x00-\xff]+$ # Javascript code
 ) |
 (?P<stream_object>
-    (\r|\n)<+[\x00-\xff]+/ObjStm\s*(/|>)                                                  # Hide object in stream
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/ObjStm\s*(/|>)                                                  # Hide object in stream
 ) |
 (?P<URI>
-    (\r|\n)<+[\x00-\xff]+/URI[\x00-\xff]+$                                                # Access resource by its URL
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/URI[\x00-\xff]+$                                                # Access resource by its URL
 ) |
 (?P<form>
-    (\r|\n)<+[\x00-\xff]+/SubmitForm[\x00-\xff]+$                                         # Send data to server
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/SubmitForm[\x00-\xff]+$                                         # Send data to server
 ) |
 (?P<send>
-    (\r|\n)<+[\x00-\xff]+/GoTo(R|E)[\x00-\xff]+$                                          # Send data to server
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/GoTo(R|E)[\x00-\xff]+$                                          # Send data to server
 ) |
 (?P<embedded>
-    (\r|\n)<+[\x00-\xff]+/EmbeddedFile[\x00-\xff]+$                                       # Access resource by its URL
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/EmbeddedFile[\x00-\xff]+$                                       # Access resource by its URL
 ) |
 (?P<GoTo>
-    (\r|\n)<+[\x00-\xff]+/GoTo\s*/[\x00-\xff]+$                                           # Change the view to a specified destination
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/GoTo\s*/[\x00-\xff]+$                                           # Change the view to a specified destination
 ) |
 (?P<acroform>
-    (\r|\n)<+[\x00-\xff]+/AcroForm[\w\s]*(/|>)
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/AcroForm[\w\s]*(/|>)
 ) |
 (?P<malicious_image>
-    (\r|\n)<+[\x00-\xff]+/JBIG2Decode\s*(/|>)
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/JBIG2Decode\s*(/|>)
 ) |
 (?P<media>
-    (\r|\n)<+[\x00-\xff]+/RichMedia[\x00-\xff]+$                                          # RichMedia can be used to embed Flash in a PDF
+    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/RichMedia[\x00-\xff]+$                                          # RichMedia can be used to embed Flash in a PDF
 ) |
 (?P<date>
     D:(\d{14})[-+Z]?(\d{2}'\d{2}')?
@@ -537,6 +579,239 @@ tags_parser: Pattern = regex(
 )
 """.encode()
 )
+
+pdf_tags_char: Pattern = regex(r"#[0-9a-fA-F]{2}".encode())
+
+pdf_string_char: Pattern = regex(r"\\[0-7]{1,3}".encode())
+
+pdf_filters: Pattern = regex(r"/Filter\s*(/\w+|\[(/\w+\s*)+\])".encode())
+
+pdf_streams: Pattern = regex(
+    r"[\x00\t\x0c\x20\r\n]?stream[\x00\t\x0c\x20\r\n][\x00-\xff]+[\x00\t\x0c\x20\r\n]endstream"
+)
+
+
+def hex_decode(data: bytes) -> bytes:
+    r"""
+    This function decodes hexadecimal encoding (ASCIIHexDecode filter).
+
+    >>> hex_decode(b"05020a 0 a 02>")
+    b'\x05\x02\n\n\x02'
+    >>>
+    """
+
+    return unhexlify(b"".join(data.rstrip(b">").split()))
+
+
+def deflate(data: bytes) -> bytes:
+    r"""
+    This function decodes zlib compressed streams (FlateDecode filter).
+
+    >>> deflate(b'x\x9cK\xcb\xcf\x07\x00\x02\x82\x01E')
+    b'foo'
+    >>> deflate(b'x\x9cJ\xcb\xcf\x07\x00foo')
+    b'foofoo'
+    >>> deflate(b'foo')
+    b'foo'
+    >>>
+    """
+
+    with suppress(zliberror):
+        return zlib(data)
+
+    data_length = len(data)
+    zlib_instance = zlib_object()
+    uncompressed = bytearray()
+    for index, byte in enumerate(data):
+        try:
+            uncompressed.extend(
+                zlib_instance.decompress(byte.to_bytes(1, "big"))
+            )
+        except:
+            break
+
+    if index < 3:
+        return data
+
+    return bytes(uncompressed) + data[index:]
+
+
+# https://pdfbox.apache.org/docs/1.8.12/javadocs/org/apache/pdfbox/filter/RunLengthDecodeFilter.html
+# https://gogit.univ-orleans.fr/lifo/no/openboard/blob/a53f41f71b8346e263e44e146d6e0853e20f4867/src/pdf-merger/RunLengthDecode.cpp
+
+
+def runlength_decode(data: bytes) -> bytes:
+    r"""
+    This function decodes streams with filter RunLengthDecode.
+
+    >>> runlength_decode(b'\x030123\xffa\x80')
+    b'0123aa'
+    >>> runlength_decode(b'\x000\xffa')
+    b'0aa'
+    >>>
+    """
+
+    uncompressed = bytearray()
+
+    characters = BytesIO(data)
+    character = characters.read(1)
+
+    while character:
+        character = int.from_bytes(characters, "big")
+        if character < 128:
+            uncompressed.extend(characters.read(character + 1))
+        elif character > 128:
+            uncompressed.extend(characters.read(1) * (257 - character))
+        else:
+            break
+        character = characters.read(1)
+
+    return bytes(uncompressed)
+
+
+def a85decode(data: bytes) -> bytes:
+    r"""
+    This function decodes ascii 85.
+
+    >>> a85decode(b'0AZauzaZbv~foobar')
+    b'/\xde\x02D\x00\x00\x00\x00\xc9>'
+    >>>
+    """
+
+    new_data = bytearray()
+    position = block = 0
+    for character in data:
+        if 32 < character < 118:
+            position += 1
+            block = block * 85 + character - 33
+            if position == 5:
+                new_data.extend(block.to_bytes(4, "big"))
+                position = block = 0
+        elif character == 122:
+            new_data.extend(b"\0" * 4)
+        elif character == 126:
+            if position:
+                [block := block * 85 + 84 for _ in range(position, 5)]
+                new_data.extend(block.to_bytes(4, "big")[: position - 1])
+            break
+    return bytes(new_data)
+
+
+# https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf
+# http://paulbourke.net/dataformats/postscript/psref.pdf
+# https://en.wikipedia.org/wiki/Lempel%E2%80%93Ziv%E2%80%93Welch
+# https://github.com/empira/PDFsharp/blob/master/src/PdfSharp/Pdf.Filters/LzwDecode.cs
+# https://github.com/katjas/PDFrenderer/blob/master/src/com/sun/pdfview/decode/LZWDecode.java
+
+# http://www-igm.univ-mlv.fr/~lecroq/cours/lzw.pdf
+# https://www.normalesup.org/~simonet/teaching/caml-prepa/tp-caml-2001-07.pdf
+# https://perso.limsi.fr/anne/coursAlgo/lzwAS.pdf
+
+# https://github.com/hhrutter/lzw/blob/master/reader.go
+# https://github.com/gettalong/hexapdf/blob/b9e194418b3b1bf89d6842e264dbff1c348c1332/lib/hexapdf/filter/lzw_decode.rb
+# https://github.com/tecnickcom/tc-lib-pdf-filter/blob/c56027589f3e9456c469feaf3a7987cb796f9a44/src/Type/Lzw.php
+
+
+class LzwDecode:
+    r"""
+    This class decodes LZW compressed data.
+
+    >>> decoder = LzwDecode()
+    >>> decoder.decode(b'\x80\x0b\x60\x50\x22\x0c\x0c\x85\x01')
+    b'-----A---B'
+    >>> decoder.decode(b'\x80\x0b\x60\x50\x22\x0c\x0c\x85\x01')
+    b'-----A---B'
+    >>>
+    """
+
+    bits_number_table = {511: 10, 1023: 11, 2047: 12}
+
+    def __init__(self):
+        self.character = 0
+        self.bits_number = 9
+        self.byte = b"\0"
+        self.bits_index = 8
+        self.precedent_bytes: bytes = None
+        self.file = BytesIO()
+        self.uncompressed = bytearray()
+        self.code = 0
+
+    def decode(self, data: bytes) -> bytes:
+        """
+        This function decodes compressed data.
+        """
+
+        self.code = 0
+        self.byte = b"\0"
+        self.uncompressed.clear()
+        position = self.file.tell()
+        self.file.write(data)
+        self.file.seek(position)
+
+        while self.byte and self.code != 257:
+            self.shift = 8 - self.bits_index
+            self.code = 0
+            bits = self.bits_number
+            while self.byte and self.bits_number > self.shift:
+                self.read_block()
+            self.code = (self.code << self.bits_number) | (
+                (self.character >> (self.shift - self.bits_number))
+                & ((1 << self.bits_number) - 1)
+            )
+            self.bits_index += self.bits_number
+            self.bits_number = bits
+            self.do_code()
+
+        return bytes(self.uncompressed)
+
+    def read_block(self) -> None:
+        """
+        This function reads a LZW block.
+        """
+
+        self.code = (self.code << self.shift) | (
+            self.character & ((1 << self.shift) - 1)
+        )
+        self.bits_number -= self.shift
+        self.byte = self.file.read(1)
+        self.character = int.from_bytes(self.byte, "big")
+        self.bits_index = 0
+        self.shift = 8 - self.bits_index
+
+    def do_code(self) -> None:
+        """
+        This function makes actions for the specific code.
+        """
+
+        if self.code == 256:
+            self.table = [x.to_bytes(1, "big") for x in range(256)]
+            self.table.extend((None, None))
+            self.precedent_bytes = b""
+            self.bits_number = 9
+        elif not self.precedent_bytes:
+            self.precedent_bytes = self.table[self.code]
+            self.uncompressed.extend(self.precedent_bytes)
+        elif self.code != 257:
+            if self.code < len(self.table):
+                x = self.table[self.code]
+                self.uncompressed.extend(x)
+                self.table.append(
+                    self.precedent_bytes + x[0].to_bytes(1, "big")
+                )
+            else:
+                self.table.append(
+                    self.precedent_bytes
+                    + self.precedent_bytes[0].to_bytes(1, "big")
+                )
+                x = self.table[self.code]
+                self.uncompressed.extend(x)
+            self.bits_number = LzwDecode.bits_number_table.get(
+                len(self.table), self.bits_number
+            )
+            self.precedent_bytes = x
+
+
+lzwdecode = LzwDecode().decode
 
 
 class PDForensic(ABC):
@@ -559,6 +834,19 @@ class PDForensic(ABC):
         "acroform": 15,
         "malicious_image": 10,
         "media": 10,
+    }
+
+    filters = {
+        "LZWDecode": lzwdecode,
+        "LZW": lzwdecode,
+        "ASCII85Decode": a85decode,
+        "A85": a85decode,
+        "ASCIIHexDecode": hex_decode,
+        "AHx": hex_decode,
+        "FlateDecode": deflate,
+        "Fl": deflate,
+        "RunLengthDecode": runlength_decode,
+        "R": runlength_decode,
     }
 
     def __init__(
@@ -597,6 +885,7 @@ class PDForensic(ABC):
         self.file = file
         self.score = {}
         self._start = 0
+        self.count = 0
         self._end = 0
 
         if not filter_ and (
@@ -605,7 +894,6 @@ class PDForensic(ABC):
             logger_warning("Filters are not used but you add filter values.")
 
     def get_malicious_score(self) -> float:
-
         """
         This function calculates malicious score.
         """
@@ -618,7 +906,6 @@ class PDForensic(ABC):
         )
 
     def report(self) -> Dict[str, Union[str, int]]:
-
         """
         This function reports PDF analysis.
         """
@@ -649,7 +936,6 @@ class PDForensic(ABC):
         }
 
     def parse(self) -> None:
-
         """
         This function parses PDF data.
         """
@@ -671,6 +957,9 @@ class PDForensic(ABC):
         for match in pdf_parser.finditer(data):
             self._start = match.start()
             self._end = match.end()
+            data = match.group()
+            id_ = data.split(maxsplit=1)[0]
+            self.current_id = int(id_) if id_.isdigit() else -1
 
             if match.lastgroup == "object":
                 processed = self.get_data_process(match)
@@ -684,20 +973,94 @@ class PDForensic(ABC):
                     + " match the 'id' filter."
                 )
                 if not processed:
-                    self.to_handle("object", match.group())
+                    self.to_handle("object", data)
+                    self.to_handle(
+                        "decoded_data",
+                        self.pdf_unfilter(match.group(16), data),
+                    )
 
-            self.current_id += 1
+            self.count += 1
+
+    @staticmethod
+    def deobfuscation(tags: bytes) -> bytes:
+        r"""
+        This function deobfuscates tags.
+
+        >>> PDForensic.deobfuscation(r'#61(\142)#63'.encode())
+        b'a(b)c'
+        >>> PDForensic.deobfuscation(r')'.encode())
+        [2016-06-22 17:58:15] ERROR    (40) {PDForensic - PDForensic.py:722} PDF syntax error
+        >>>
+        """
+
+        for char in pdf_tags_char.finditer(tags):
+            char = char.group()
+            tags = tags.replace(char, chr(int(char[1:], 16)).encode())
+
+        start_index: int = None
+        precedent: int = None
+
+        for i, char in enumerate(tags):
+            if precedent:
+                continue
+
+            if char == 40:
+                start_index = i
+            elif char == 41:
+                end_index = i
+                if start_index is None:
+                    logger_error("PDF syntax error")
+                    continue
+                pdf_string = tags[start_index:end_index]
+                for char in pdf_string_char.finditer(pdf_string):
+                    char = char.group()
+                    pdf_string = pdf_string.replace(
+                        char, chr(int(char[1:], 8)).encode()
+                    )
+                tags = tags[:start_index] + pdf_string + tags[end_index:]
+
+            precedent = char
+
+        return tags
+
+    def pdf_unfilter(self, tags: bytes, full_data: bytes) -> bytes:
+        """
+        This function decodes and decompress PDF streams.
+        """
+
+        filters = pdf_filters.search(tags)
+
+        if filters is None:
+            return full_data
+
+        data = full_data[full_data.index(tags) + len(tags) :]
+        data = data.split(b"endstream")[0].split(b"stream")[1].strip()
+
+        for filter_ in filters.group(1).decode().strip("[]").split("/"):
+            callback = PDForensic.filters.get(filter_)
+            if filter_:
+                if callback:
+                    data = callback(data)
+                else:
+                    break
+        else:
+            return data
+
+        return full_data
 
     def get_data_process(self, match: Match) -> bool:
-
         """
-        This function sends only data to process to filter.
+        This function sends only data to process to filters.
         """
 
         full_data = match.group()
         logger_debug("Getting tags for object " + str(self.current_id))
-        tags = match.group(2)
-        tags = tags if tags.strip() else match.group(1)
+        tags = match.group(16)
+        # tags = tags if tags and tags.strip() else match.group(1)
+        if tags is None:
+            breakpoint()
+
+        tags = self.deobfuscation(tags)
 
         if self.process_data:
             processed = self.filter(full_data)
@@ -735,7 +1098,6 @@ class PDForensic(ABC):
     def type_filter(
         self, type_: str, data: bytes, processed: bool = None
     ) -> bool:
-
         """
         This function filters objects by type.
         """
@@ -748,8 +1110,7 @@ class PDForensic(ABC):
                 self.to_handle("object", data, type_)
             return True
 
-    def filter(self, data: bytes) -> bool:
-
+    def filter(self, data: bytes, decoded_data: bytes = None) -> bool:
         """
         This function filters objects.
         """
@@ -789,7 +1150,6 @@ class PDForensic(ABC):
                 return True
 
     def to_handle(self, type_: str, data: bytes, typename: str = "") -> None:
-
         """
         This function calls inherited 'handle_object' methods.
         """
@@ -828,7 +1188,6 @@ class ToCSV(PDForensic):
         self.csv_writer = writer(file)
 
     def handle(self, type_: str, data: bytes, typename: str = "") -> None:
-
         """
         This function saves filtered objects into a CSV report.
         """
@@ -854,7 +1213,7 @@ class ToCSV(PDForensic):
                 [
                     str(self.current_id),
                     type_,
-                    data.decode("latin-1"),
+                    str(data),
                     str(self._start),
                     str(self._end),
                 ]
@@ -868,7 +1227,6 @@ class Printer(PDForensic):
     """
 
     def handle(self, type_: str, data: bytes, typename: str = "") -> None:
-
         """
         This function prints filtered objects.
         """
@@ -880,8 +1238,31 @@ class Printer(PDForensic):
             or type_ == "startxref"
         ):
             print(str(self.current_id).ljust(9), type_.ljust(25), typename)
+        elif (
+            type_ == "null"
+            or type_ == "boolean"
+            or type_ == "integer"
+            or type_ == "number"
+            or type_ == "ref"
+            or type_ == "string"
+            or type_ == "array"
+        ):
+            print(
+                str(self.current_id).ljust(9),
+                type_.ljust(25),
+                repr(
+                    data.split(b"endobj")[0]
+                    .split(b"obj")[1]
+                    .strip()
+                    .decode("latin1")
+                ),
+            )
         else:
-            print(str(self.current_id).ljust(9), type_.ljust(25), data)
+            print(
+                str(self.current_id).ljust(9),
+                type_.ljust(25),
+                repr(data.decode("latin1")),
+            )
 
 
 class ToJSON(PDForensic):
@@ -899,7 +1280,6 @@ class ToJSON(PDForensic):
         self.json_file = open(filename, "a")
 
     def handle(self, type_: str, data: bytes, typename: str = "") -> None:
-
         """
         This function saves filtered objects into a JSON report.
         """
@@ -936,7 +1316,6 @@ class ToJSON(PDForensic):
 
 
 def get_custom_logger(name: str = None) -> Logger:
-
     """
     This function create a custom logger.
     """
@@ -961,7 +1340,6 @@ def get_custom_logger(name: str = None) -> Logger:
 
 
 def parse_args() -> Namespace:
-
     """
     This function parses command line arguments.
     """
@@ -1035,7 +1413,8 @@ def parse_args() -> Namespace:
     group_filter = parser.add_argument_group(
         "Filter", description="Add custom elements to filter"
     )
-    group_filter.add_argument(
+    group_filter_add_argument = group_filter.add_argument
+    group_filter_add_argument(
         "-s",
         "--strings",
         default=[],
@@ -1043,7 +1422,7 @@ def parse_args() -> Namespace:
         action="extend",
         help="Add string element to filter.",
     )
-    group_filter.add_argument(
+    group_filter_add_argument(
         "-r",
         "--regex",
         default=[],
@@ -1051,7 +1430,7 @@ def parse_args() -> Namespace:
         action="extend",
         help="Add regex element to filter.",
     )
-    group_filter.add_argument(
+    group_filter_add_argument(
         "-x",
         "--hexadecimal-data",
         "--hexa",
@@ -1060,7 +1439,7 @@ def parse_args() -> Namespace:
         action="extend",
         help="Add hexadecimal binary data element to filter.",
     )
-    group_filter.add_argument(
+    group_filter_add_argument(
         "-y",
         "--types",
         default=[],
@@ -1068,7 +1447,7 @@ def parse_args() -> Namespace:
         action="extend",
         help="Add a filter for PDF objects based on type name.",
     )
-    group_filter.add_argument(
+    group_filter_add_argument(
         "-i",
         "--ids",
         default=[],
@@ -1088,7 +1467,6 @@ def launch(
     types: Iterable[type],
     report_file: TextIOWrapper,
 ) -> Tuple[int, bool]:
-
     """
     This function starts PDF file analysis.
     """
@@ -1121,7 +1499,6 @@ def launch(
 
 
 def main() -> int:
-
     """
     This function starts this script from command line.
     """
@@ -1130,7 +1507,7 @@ def main() -> int:
 
     logger.setLevel(arguments.logs)
     report = open(
-        "PDForensic" + datetime.now().strftime("_%Y_%m_%d_%H_%M_%s") + ".json",
+        "PDForensic" + datetime.now().strftime("_%Y_%m_%d_%H_%M_%S") + ".json",
         "a",
     )
 
