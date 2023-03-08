@@ -426,7 +426,7 @@ eof_tag b'%%EOF\n'
 >>> 
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Maurice Lambert"
 __author_email__ = "mauricelambert434@gmail.com"
 __maintainer__ = "Maurice Lambert"
@@ -454,9 +454,9 @@ from zlib import (
     error as zliberror,
 )
 from logging import StreamHandler, Formatter, Logger, getLogger
+from typing import Dict, Union, Tuple, Iterable, List
 from sys import stdout, stderr, stdin, _getframe
 from re import compile as regex, Pattern, Match
-from typing import Dict, Union, Tuple, Iterable
 from argparse import ArgumentParser, Namespace
 from base64 import b16decode, b16encode
 from os.path import basename, splitext
@@ -475,51 +475,51 @@ from json import dump
 from math import ceil
 
 pdf_parser: Pattern = regex(
-    r"""(?x)
+    r"""(?xs)
 (?P<null>
-    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+null[\x00\t\x0c\x20\r\n]+endobj
+    \d+\s+\d+\s+obj\s+null\s+endobj
 ) |
 (?P<boolean>
-    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+(true|false)[\x00\t\x0c\x20\r\n]+endobj
+    \d+\s+\d+\s+obj\s+(true|false)\s+endobj
 ) |
 (?P<integer>
-    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+-?\d+[\x00\t\x0c\x20\r\n]+endobj
+    \d+\s+\d+\s+obj\s+-?\d+\s+endobj
 ) |
 (?P<number>
-    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+-?\d+\.\d+[\x00\t\x0c\x20\r\n]+endobj
+    \d+\s+\d+\s+obj\s+-?\d+\.\d+\s+endobj
 ) |
 (?P<ref>
-    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]\d+[\x00\t\x0c\x20\r\n]R[\x00\t\x0c\x20\r\n]+endobj
+    \d+\s+\d+\s+obj\s+\d+\s\d+\sR\s+endobj
 ) |
 (?P<string>
-    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+\([\x00-\xff]+\)[\x00\t\x0c\x20\r\n]+endobj
+    \d+\s+\d+\s+obj\s+\([\x00-\xff]+\)\s+endobj
 ) |
 (?P<array>
-    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00\t\x0c\x20\r\n]+\[[\x00\t\x0c\x20\r\n]*((-?\d+(\.\d+)?|R|\([\x00-\xff]+?\)|<+[\x00-\xff]+?>+|\[[\x00-\xff]*?\]|true|false|null|/\w+)[\x00\t\x0c\x20\r\n]+)*(-?\d+(\.\d+)?|R|\([\x00-\xff]+\)|<+[\x00-\xff]+?>+|\[[\x00-\xff]*?\]|true|false|null|/\w+)[\x00\t\x0c\x20\r\n]*\][\x00\t\x0c\x20\r\n]+endobj
+    \d+\s+\d+\s+obj\s+\[\s*((-?\d+(\.\d+)?|R|\([\x00-\xff]+?\)|<+[\x00-\xff]+?>+|\[[\x00-\xff]*?\]|true|false|null|/\w+)\s+)*(-?\d+(\.\d+)?|R|\([\x00-\xff]+\)|<+[\x00-\xff]+?>+|\[[\x00-\xff]*?\]|true|false|null|/\w+)\s*\]\s+endobj
 ) |
 (?P<object>
-    (\d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj([\x00\t\x0c\x20\r\n]+<+[\x00-\xff]+?>+))([\x00\t\x0c\x20\r\n]*stream[\x00\t\x0c\x20\r\n]([\x00-\xff]*?)([\x00\t\x0c\x20\r\n]endstream)[\x00\t\x0c\x20\r\n]+endobj[\x00\t\x0c\x20\r\n]|[\x00\t\x0c\x20\r\n]+endobj[\x00\t\x0c\x20\r\n])
+    (\d+\s+\d+\s+obj(\s+<+[\x00-\xff]+?>+))(\s*stream\s([\x00-\xff]*?)(\sendstream)\s+endobj\s|\s+endobj\s)
 ) |
 (?P<root>
-    <+((/ID[\x00\t\x0c\x20\r\n]*\[[\x00\t\x0c\x20\r\n]*(<[\da-fA-F]+>){1,2}\])|[^>]*?)*/Root((/ID[\x00\t\x0c\x20\r\n]*\[[\x00\t\x0c\x20\r\n]*(<[\da-fA-F]+>){1,2}\])|[^>]*?)*>+
+    <+((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>]*?)*/Root((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>]*?)*>+
 ) |
 (?P<pdf_tag>
-    %PDF(-\d+\.\d+)?[\x00\t\x0c\x20\r\n]
+    %PDF(-\d+\.\d+)?\s
 ) |
 (?P<eof_tag>
-    %%EOF[\x00\t\x0c\x20\r\n]?
+    %%EOF\s?
 ) |
 (?P<binary_tag>
-    %[\x00-\xff]{4}[\x00\t\x0c\x20\r\n]
+    %[\x00-\xff]{4}\s
 ) |
 (?P<startxref>
-    startxref[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+
+    startxref\s+\d+\s+
 ) |
 (?P<xref>
-    xref[\n\r\w ]+?trailer[\x00\t\x0c\x20\r\n]+
+    xref[\n\r\w ]+?trailer\s+
 ) |
 (?P<unknow_object>
-    \d+[\x00\t\x0c\x20\r\n]+\d+[\x00\t\x0c\x20\r\n]+obj[\x00-\xff]+?endobj
+    \d+\s+\d+\s+obj[\x00-\xff]+?endobj
 ) |
 (?P<unknow_token>
     [^\x00\t\x0c\x20\r\n]+
@@ -530,43 +530,43 @@ pdf_parser: Pattern = regex(
 tags_parser: Pattern = regex(
     r"""(?xi)
 (?P<command>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/Launch[\x00-\xff]+$                                             # Launch can launch a command
+    \s<+[\x00-\xff]+/Launch[\x00-\xff]+$                                             # Launch can launch a command
 ) |
 (?P<AA_script_starter>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/AA\s*<+[\x00-\xff]+$                                            # Start run automatically scripts
+    \s<+[\x00-\xff]+/AA\s*<+[\x00-\xff]+$                                            # Start run automatically scripts
 ) |endstream\rendobj
 (?P<OpenAction_script_starter>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/OpenAction[\x00-\xff]+$                                         # Start run automatically scripts
+    \s<+[\x00-\xff]+/OpenAction[\x00-\xff]+$                                         # Start run automatically scripts
 ) |
 (?P<scripts>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/JavaScript(\s*/JS(\([\x00-\xff]+\)[\x00-\xff]+)?)?[\x00-\xff]+$ # Javascript code
+    \s<+[\x00-\xff]+/JavaScript(\s*/JS(\([\x00-\xff]+\)[\x00-\xff]+)?)?[\x00-\xff]+$ # Javascript code
 ) |
 (?P<stream_object>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/ObjStm\s*(/|>)                                                  # Hide object in stream
+    \s<+[\x00-\xff]+/ObjStm\s*(/|>)                                                  # Hide object in stream
 ) |
 (?P<URI>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/URI[\x00-\xff]+$                                                # Access resource by its URL
+    \s<+[\x00-\xff]+/URI[\x00-\xff]+$                                                # Access resource by its URL
 ) |
 (?P<form>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/SubmitForm[\x00-\xff]+$                                         # Send data to server
+    \s<+[\x00-\xff]+/SubmitForm[\x00-\xff]+$                                         # Send data to server
 ) |
 (?P<send>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/GoTo(R|E)[\x00-\xff]+$                                          # Send data to server
+    \s<+[\x00-\xff]+/GoTo(R|E)[\x00-\xff]+$                                          # Send data to server
 ) |
 (?P<embedded>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/EmbeddedFile[\x00-\xff]+$                                       # Access resource by its URL
+    \s<+[\x00-\xff]+/EmbeddedFile[\x00-\xff]+$                                       # Access resource by its URL
 ) |
 (?P<GoTo>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/GoTo\s*/[\x00-\xff]+$                                           # Change the view to a specified destination
+    \s<+[\x00-\xff]+/GoTo\s*/[\x00-\xff]+$                                           # Change the view to a specified destination
 ) |
 (?P<acroform>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/AcroForm[\w\s]*(/|>)
+    \s<+[\x00-\xff]+/AcroForm[\w\s]*(/|>)
 ) |
 (?P<malicious_image>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/JBIG2Decode\s*(/|>)
+    \s<+[\x00-\xff]+/JBIG2Decode\s*(/|>)
 ) |
 (?P<media>
-    [\x00\t\x0c\x20\r\n]<+[\x00-\xff]+/RichMedia[\x00-\xff]+$                                          # RichMedia can be used to embed Flash in a PDF
+    \s<+[\x00-\xff]+/RichMedia[\x00-\xff]+$                                          # RichMedia can be used to embed Flash in a PDF
 ) |
 (?P<date>
     D:(\d{14})[-+Z]?(\d{2}'\d{2}')?
@@ -587,7 +587,7 @@ pdf_string_char: Pattern = regex(r"\\[0-7]{1,3}".encode())
 pdf_filters: Pattern = regex(r"/Filter\s*(/\w+|\[(/\w+\s*)+\])".encode())
 
 pdf_streams: Pattern = regex(
-    r"[\x00\t\x0c\x20\r\n]?stream[\x00\t\x0c\x20\r\n][\x00-\xff]+[\x00\t\x0c\x20\r\n]endstream"
+    r"\s?stream\s[\x00-\xff]+\sendstream"
 )
 
 
@@ -619,7 +619,7 @@ def deflate(data: bytes) -> bytes:
     with suppress(zliberror):
         return zlib(data)
 
-    data_length = len(data)
+    # data_length = len(data)
     zlib_instance = zlib_object()
     uncompressed = bytearray()
     for index, byte in enumerate(data):
@@ -920,7 +920,7 @@ class PDForensic(ABC):
                 "types": list(self.score.keys()),
             },
             "objects": {
-                "found": self.current_id,
+                "found": self.count,
                 "processed": self.processed,
                 "counter": {k: v for k, v in self.type_counter.most_common()},
             },
@@ -935,9 +935,9 @@ class PDForensic(ABC):
             },
         }
 
-    def parse(self) -> None:
+    def read_file(self) -> bytes:
         """
-        This function parses PDF data.
+        This function returns data readed from PDF file.
         """
 
         logger_debug("Getting data for " + str(self.file))
@@ -945,13 +945,20 @@ class PDForensic(ABC):
         if isinstance(self.file, str):
             try:
                 with open(self.file, "rb") as file:
-                    data = file.read()
+                    return file.read()
             except Exception as e:
                 logger_error("Can't open " + self.file + " error: " + str(e))
                 self.exit_code += 5
                 return None
         else:
-            data = self.file.read()
+            return self.file.read()
+
+    def parse(self) -> None:
+        """
+        This function parses PDF data.
+        """
+
+        data = self.read_file()
 
         logger_debug("Start data parsing for " + str(self.file))
         for match in pdf_parser.finditer(data):
@@ -1056,9 +1063,6 @@ class PDForensic(ABC):
         full_data = match.group()
         logger_debug("Getting tags for object " + str(self.current_id))
         tags = match.group(16)
-        # tags = tags if tags and tags.strip() else match.group(1)
-        if tags is None:
-            breakpoint()
 
         tags = self.deobfuscation(tags)
 
@@ -1072,6 +1076,7 @@ class PDForensic(ABC):
             group = tag.lastgroup
             data = tag.group()
             type_ = ""
+            suspicious = False
 
             if group == "type":
                 type_ = data.split(b"/")[2].strip().decode()
@@ -1081,7 +1086,15 @@ class PDForensic(ABC):
                 type_ = data.split(b"/")[2].strip().decode()
                 processed = self.type_filter(type_, full_data, processed)
                 self.type_counter["subtype - " + type_] += 1
+            elif group == "stream_object":
+                StreamObjectParser(
+                    self, self.pdf_unfilter(tags, full_data)
+                ).parse()
+                suspicious = True
             elif group != "date":
+                suspicious = True
+
+            if suspicious:
                 logger_info(
                     "Getting suspicious tag: '"
                     + group
@@ -1170,6 +1183,61 @@ class PDForensic(ABC):
     @abstractmethod
     def handle(self, type_: str, data: bytes, typename: str = "") -> None:
         pass
+
+
+class StreamObjectParser:
+
+    """
+    This class implements a stream object parser.
+    """
+
+    def __init__(self, forensic: PDForensic, data: bytes):
+        self.forensic = forensic
+        self.data = data
+
+    def get_id_positions(self) -> List[Tuple[int, int]]:
+        """
+        This function returns IDs and position for each object in the stream.
+        """
+
+        data = self.data
+        id_position = data.split(b" ", maxsplit=2)
+
+        if len(id_position) == 3:
+            id_, position, data = id_position
+        else:
+            return [], self.data
+
+        id_positions = []
+        add = id_positions.append
+        while id_.isdigit() and position.isdigit():
+            add((int(id_), int(position)))
+
+            id_position = data.split(b" ", maxsplit=2)
+
+            if len(id_position) == 3:
+                id_, position, data = id_position
+            else:
+                break
+
+        data = b" ".join((id_, position, data))
+        return id_positions, data
+
+    def parse(self) -> None:
+        """
+        This function processes tags in stream object.
+        """
+
+        id_positions, data = self.get_id_positions()
+        forensic = self.forensic
+        process_data = forensic.get_data_process
+
+        for id_, position in id_positions[::-1]:
+            forensic.current_id = id_
+            process_data(
+                type("Match", (), {"group": lambda *x: data[position:]})
+            )
+            data = data[:position]
 
 
 class ToCSV(PDForensic):
