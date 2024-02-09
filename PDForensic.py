@@ -3,7 +3,7 @@
 
 ###################
 #    This tool analyses PDF files for Forensic Investigations
-#    Copyright (C) 2022, 2023  Maurice Lambert
+#    Copyright (C) 2022, 2023, 2024  Maurice Lambert
 
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -426,7 +426,7 @@ eof_tag b'%%EOF\n'
 >>> 
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Maurice Lambert"
 __author_email__ = "mauricelambert434@gmail.com"
 __maintainer__ = "Maurice Lambert"
@@ -436,7 +436,7 @@ license = "GPL-3.0 License"
 __url__ = "https://github.com/mauricelambert/PDForensic"
 
 copyright = """
-PDForensic  Copyright (C) 2022, 2023  Maurice Lambert
+PDForensic  Copyright (C) 2022, 2023, 2024  Maurice Lambert
 This program comes with ABSOLUTELY NO WARRANTY.
 This is free software, and you are welcome to redistribute it
 under certain conditions.
@@ -501,7 +501,7 @@ pdf_parser: Pattern = regex(
     (\d+\s+\d+\s+obj(\s+<+[\x00-\xff]+?>+))(\s*stream\s([\x00-\xff]*?)(\sendstream)\s+endobj\s|\s+endobj\s)
 ) |
 (?P<root>
-    <+((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>]*?)*/Root((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>]*?)*>+
+    <+((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>])*?/Root((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>])*?>+
 ) |
 (?P<pdf_tag>
     %PDF(-\d+\.\d+)?\s
