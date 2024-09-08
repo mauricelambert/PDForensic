@@ -3,7 +3,7 @@
 
 ###################
 #    This tool analyses PDF files for Forensic Investigations
-#    Copyright (C) 2022, 2023, 2024  Maurice Lambert
+#    Copyright (C) 2022-2024  Maurice Lambert
 
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -426,7 +426,7 @@ eof_tag b'%%EOF\n'
 >>> 
 """
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 __author__ = "Maurice Lambert"
 __author_email__ = "mauricelambert434@gmail.com"
 __maintainer__ = "Maurice Lambert"
@@ -436,7 +436,7 @@ license = "GPL-3.0 License"
 __url__ = "https://github.com/mauricelambert/PDForensic"
 
 copyright = """
-PDForensic  Copyright (C) 2022, 2023, 2024  Maurice Lambert
+PDForensic  Copyright (C) 2022-2024  Maurice Lambert
 This program comes with ABSOLUTELY NO WARRANTY.
 This is free software, and you are welcome to redistribute it
 under certain conditions.
@@ -454,9 +454,9 @@ from zlib import (
     error as zliberror,
 )
 from logging import StreamHandler, Formatter, Logger, getLogger
+from re import compile as regex, Pattern, Match, IGNORECASE
 from typing import Dict, Union, Tuple, Iterable, List
 from sys import stdout, stderr, stdin, _getframe
-from re import compile as regex, Pattern, Match
 from argparse import ArgumentParser, Namespace
 from base64 import b16decode, b16encode
 from os.path import basename, splitext
@@ -510,7 +510,10 @@ pdf_parser: Pattern = regex(
     %%EOF\s?
 ) |
 (?P<binary_tag>
-    %[\x00-\xff]{4}\s
+    %[\x00-\xff]{4}\n
+) |
+(?P<comments>
+    %[^\n]*
 ) |
 (?P<startxref>
     startxref\s+\d+\s+
@@ -527,64 +530,31 @@ pdf_parser: Pattern = regex(
 """.encode()
 )
 
-tags_parser: Pattern = regex(
-    r"""(?xi)
-(?P<command>
-    \s<+[\x00-\xff]+/Launch[\x00-\xff]+$                                             # Launch can launch a command
-) |
-(?P<AA_script_starter>
-    \s<+[\x00-\xff]+/AA\s*<+[\x00-\xff]+$                                            # Start run automatically scripts
-) |endstream\rendobj
-(?P<OpenAction_script_starter>
-    \s<+[\x00-\xff]+/OpenAction[\x00-\xff]+$                                         # Start run automatically scripts
-) |
-(?P<scripts>
-    \s<+[\x00-\xff]+/JavaScript(\s*/JS(\([\x00-\xff]+\)[\x00-\xff]+)?)?[\x00-\xff]+$ # Javascript code
-) |
-(?P<stream_object>
-    \s<+[\x00-\xff]+/ObjStm\s*(/|>)                                                  # Hide object in stream
-) |
-(?P<URI>
-    \s<+[\x00-\xff]+/URI[\x00-\xff]+$                                                # Access resource by its URL
-) |
-(?P<form>
-    \s<+[\x00-\xff]+/SubmitForm[\x00-\xff]+$                                         # Send data to server
-) |
-(?P<send>
-    \s<+[\x00-\xff]+/GoTo(R|E)[\x00-\xff]+$                                          # Send data to server
-) |
-(?P<embedded>
-    \s<+[\x00-\xff]+/EmbeddedFile[\x00-\xff]+$                                       # Access resource by its URL
-) |
-(?P<GoTo>
-    \s<+[\x00-\xff]+/GoTo\s*/[\x00-\xff]+$                                           # Change the view to a specified destination
-) |
-(?P<acroform>
-    \s<+[\x00-\xff]+/AcroForm[\w\s]*(/|>)
-) |
-(?P<malicious_image>
-    \s<+[\x00-\xff]+/JBIG2Decode\s*(/|>)
-) |
-(?P<media>
-    \s<+[\x00-\xff]+/RichMedia[\x00-\xff]+$                                          # RichMedia can be used to embed Flash in a PDF
-) |
-(?P<date>
-    D:(\d{14})[-+Z]?(\d{2}'\d{2}')?
-) |
-(?P<type>
-    /Type\s*/[\w\s]+
-) |
-(?P<subtype>
-    /Subtype\s*/[\w\s]+
-)
-""".encode()
-)
+tags_parser: Dict[str, Pattern] = {
+    "command": regex(rb"\s<+[\x00-\xff]+/Launch[\x00-\xff]+$", flags=IGNORECASE), # Launch can launch a command
+    "aa_script_starter": regex(rb"\s<+[\x00-\xff]+/AA\s*<+[\x00-\xff]+$", flags=IGNORECASE), # Start scripts on events
+    "openaction_script_starter": regex(rb"\s<+[\x00-\xff]+/OpenAction[\x00-\xff]+$", flags=IGNORECASE), # Start scripts when PDF is open
+    "scripts": regex(rb"\s<+[\x00-\xff]+/JavaScript(\s*/JS(\([\x00-\xff]+\)[\x00-\xff]+)?)?[\x00-\xff]+$", flags=IGNORECASE), # Javascript code
+    "stream_object": regex(rb"\s<+[\x00-\xff]+/ObjStm\s*(/|>)", flags=IGNORECASE), # Hide object in stream
+    "uri": regex(rb"\s<+[\x00-\xff]+/URI[\x00-\xff]+$", flags=IGNORECASE), # Access resource by its URL
+    "form": regex(rb"\s<+[\x00-\xff]+/SubmitForm[\x00-\xff]+$", flags=IGNORECASE), # Send data to server
+    "send": regex(rb"\s<+[\x00-\xff]+/GoTo(R|E)[\x00-\xff]+$", flags=IGNORECASE), # Send data to server
+    "embedded": regex(rb"\s<+[\x00-\xff]+/EmbeddedFile[\x00-\xff]+$", flags=IGNORECASE), # Access resource by its URL
+    "go_to": regex(rb"\s<+[\x00-\xff]+/GoTo\s*/[\x00-\xff]+$", flags=IGNORECASE), # Change the view to a specified destination
+    "acroform": regex(rb'\s<+[\x00-\xff]+/AcroForm[\w\s]*(/|>)', flags=IGNORECASE),
+    "malicious_image": regex(rb'\s<+[\x00-\xff]+/JBIG2Decode\s*(/|>)', flags=IGNORECASE), # CVE-2010-0188, CVE-2009-0658, CVE-2020-10223, CVE-2009-0196, CVE-2022-38171, CVE-2022-38784, ...
+    "media": regex(rb'\s<+[\x00-\xff]+/RichMedia[\x00-\xff]+$', flags=IGNORECASE), # RichMedia can be used to embed Flash in a PDF
+    "annot": regex(rb'\s<+[\x00-\xff]+/Annot[\x00-\xff]+$', flags=IGNORECASE), # Annot can be used to hide malicious data or script
+    "date": regex(rb"D:(\d{14})[-+Z]?(\d{2}'\d{2}')?", flags=IGNORECASE),
+    "type": regex(rb'/Type\s*/[\w\s]+', flags=IGNORECASE),
+    "subtype": regex(rb'/Subtype\s*/[\w\s]+', flags=IGNORECASE),
+}
 
 pdf_tags_char: Pattern = regex(r"#[0-9a-fA-F]{2}".encode())
 
 pdf_string_char: Pattern = regex(r"\\[0-7]{1,3}".encode())
 
-pdf_filters: Pattern = regex(r"/Filter\s*(/\w+|\[(/\w+\s*)+\])".encode())
+pdf_filters: Pattern = regex(r"/Filter\s*(/[#\w]+|\[\s*(/[\w#]+\s*)+\])".encode())
 
 pdf_streams: Pattern = regex(
     r"\s?stream\s[\x00-\xff]+\sendstream"
@@ -657,7 +627,7 @@ def runlength_decode(data: bytes) -> bytes:
     character = characters.read(1)
 
     while character:
-        character = int.from_bytes(characters, "big")
+        character = int.from_bytes(character, "big")
         if character < 128:
             uncompressed.extend(characters.read(character + 1))
         elif character > 128:
@@ -823,17 +793,18 @@ class PDForensic(ABC):
     malicious_scoring: Dict[str, int] = {
         "command": 100,
         "scripts": 100,
-        "AA_script_starter": 75,
-        "OpenAction_script_starter": 75,
+        "aa_script_starter": 75,
+        "openaction_script_starter": 75,
         "stream_object": 50,
-        "URI": 25,
+        "uri": 25,
         "form": 25,
         "send": 25,
         "embedded": 25,
-        "GoTo": 15,
+        "go_to": 15,
         "acroform": 15,
         "malicious_image": 10,
         "media": 10,
+        "annot": 10,
     }
 
     filters = {
@@ -879,6 +850,7 @@ class PDForensic(ABC):
         self.process_tags = process_tags
         self.type_counter = Counter()
         self.use_filter = filter_
+        self.objects_count = 0
         self.current_id = 0
         self.exit_code = 0
         self.processed = 0
@@ -899,11 +871,7 @@ class PDForensic(ABC):
         """
 
         logger_debug("Getting malicious score for " + str(self.file))
-        return (
-            sum(self.score.values())
-            * 100
-            / sum(self.malicious_scoring.values())
-        )
+        return max(self.score.values())
 
     def report(self) -> Dict[str, Union[str, int]]:
         """
@@ -919,9 +887,12 @@ class PDForensic(ABC):
                 "score": str(ceil(self.get_malicious_score())) + "%",
                 "types": list(self.score.keys()),
             },
-            "objects": {
+            "syntax_token": {
                 "found": self.count,
                 "processed": self.processed,
+            },
+            "objects": {
+                "found": self.objects_count,
                 "counter": {k: v for k, v in self.type_counter.most_common()},
             },
             "filters": {
@@ -986,6 +957,9 @@ class PDForensic(ABC):
                         self.pdf_unfilter(match.group(16), data),
                     )
 
+            object_header = data.split(maxsplit=3)
+            if len(object_header) > 3 and object_header[2] == b'obj':
+                self.objects_count += 1
             self.count += 1
 
     @staticmethod
@@ -1035,7 +1009,7 @@ class PDForensic(ABC):
         This function decodes and decompress PDF streams.
         """
 
-        filters = pdf_filters.search(tags)
+        filters = pdf_filters.search(self.deobfuscation(tags))
 
         if filters is None:
             return full_data
@@ -1044,16 +1018,41 @@ class PDForensic(ABC):
         data = data.split(b"endstream")[0].split(b"stream")[1].strip()
 
         for filter_ in filters.group(1).decode().strip("[]").split("/"):
-            callback = PDForensic.filters.get(filter_)
+            callback = PDForensic.filters.get(filter_.strip())
             if filter_:
                 if callback:
                     data = callback(data)
-                else:
-                    break
         else:
             return data
 
         return full_data
+
+    def process_identified_tags(self, group: str, data: bytes, full_data: bytes, tags: bytes, processed: bool) -> Tuple[bool, str, bool]:
+        """
+        This method identify the match type and
+        launch the specific process for this type.
+        """
+
+        type_ = ""
+        suspicious = False
+
+        if group == "type":
+            type_ = data.split(b"/")[2].strip().decode()
+            processed = self.type_filter(type_, full_data, processed)
+            self.type_counter["type - " + type_] += 1
+        elif group == "subtype":
+            type_ = data.split(b"/")[2].strip().decode()
+            processed = self.type_filter(type_, full_data, processed)
+            self.type_counter["subtype - " + type_] += 1
+        elif group == "stream_object":
+            StreamObjectParser(
+                self, self.pdf_unfilter(tags, full_data)
+            ).parse()
+            suspicious = True
+        elif group != "date":
+            suspicious = True
+
+        return suspicious, type_, processed
 
     def get_data_process(self, match: Match) -> bool:
         """
@@ -1064,47 +1063,31 @@ class PDForensic(ABC):
         logger_debug("Getting tags for object " + str(self.current_id))
         tags = match.group(16)
 
-        tags = self.deobfuscation(tags)
+        tags_deobfu = self.deobfuscation(tags)
 
         if self.process_data:
             processed = self.filter(full_data)
         else:
-            processed = self.filter(tags)
+            processed = self.filter(tags_deobfu)
 
         logger_debug("Start tags analysis for object " + str(self.current_id))
-        for tag in tags_parser.finditer(tags):
-            group = tag.lastgroup
-            data = tag.group()
-            type_ = ""
-            suspicious = False
+        for group, regex in tags_parser.items():
+            logger_debug("Start regex " + group)
+            for tag in regex.finditer(tags_deobfu):
+                data = tag.group()
+                suspicious, type_, processed = self.process_identified_tags(group, data, full_data, tags, processed)
 
-            if group == "type":
-                type_ = data.split(b"/")[2].strip().decode()
-                processed = self.type_filter(type_, full_data, processed)
-                self.type_counter["type - " + type_] += 1
-            elif group == "subtype":
-                type_ = data.split(b"/")[2].strip().decode()
-                processed = self.type_filter(type_, full_data, processed)
-                self.type_counter["subtype - " + type_] += 1
-            elif group == "stream_object":
-                StreamObjectParser(
-                    self, self.pdf_unfilter(tags, full_data)
-                ).parse()
-                suspicious = True
-            elif group != "date":
-                suspicious = True
+                if suspicious:
+                    logger_info(
+                        "Getting suspicious tag: '"
+                        + group
+                        + "' for object "
+                        + str(self.current_id)
+                    )
+                    self.score[group] = self.malicious_scoring[group]
 
-            if suspicious:
-                logger_info(
-                    "Getting suspicious tag: '"
-                    + group
-                    + "' for object "
-                    + str(self.current_id)
-                )
-                self.score[group] = self.malicious_scoring[group]
-
-            if not self.custom_filter:
-                self.to_handle(group, data, type_)
+                if not self.custom_filter:
+                    self.to_handle(group, data, type_)
 
         return processed
 
