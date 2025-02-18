@@ -426,7 +426,7 @@ eof_tag b'%%EOF\n'
 >>> 
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __author__ = "Maurice Lambert"
 __author_email__ = "mauricelambert434@gmail.com"
 __maintainer__ = "Maurice Lambert"
@@ -501,7 +501,7 @@ pdf_parser: Pattern = regex(
     (\d+\s+\d+\s+obj(\s+<+[\x00-\xff]+?>+))(\s*stream\s([\x00-\xff]*?)(\sendstream)\s+endobj\s|\s+endobj\s)
 ) |
 (?P<root>
-    <+((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>])*?/Root((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>])*?>+
+    <+((/ID\s*\[\s*(<[\da-fA-F]+>){1,2}\])|[^>])*?/Root((/ID\s*\[\s*(<[\da-fA-F]+>\s*){1,2}\])|[^>])*?>+
 ) |
 (?P<pdf_tag>
     %PDF(-\d+\.\d+)?\s
